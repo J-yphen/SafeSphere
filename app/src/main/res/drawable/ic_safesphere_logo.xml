@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Concept: Real-time, continuous, non-intrusive scanning detection. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+        android:width="100dp"
+        android:height="100dp"
+        android:viewportWidth="24"
+        android:viewportHeight="24">
+    <!-- Center Point (Device) -->
+    <path
+            android:fillColor="?attr/colorPrimary"
+            android:pathData="M12 12m-2 0a2 2 0 1 1 4 0 2 2 0 1 1-4 0"/>
+    <!-- Pulse 1 (Inner Arc) -->
+    <path
+            android:strokeColor="?attr/colorPrimary"
+            android:strokeWidth="1.5"
+            android:strokeAlpha="0.8"
+            android:pathData="M12 6A6 6 0 0 0 6 12 6 6 0 0 0 12 18 6 6 0 0 0 18 12"/>
+    <!-- Pulse 2 (Outer Arc) -->
+    <path
+            android:strokeColor="?attr/colorPrimary"
+            android:strokeWidth="1.5"
+            android:strokeAlpha="0.4"
+            android:pathData="M12 4A8 8 0 0 0 4 12 8 8 0 0 0 12 20 8 8 0 0 0 20 12"/>
+</vector>
