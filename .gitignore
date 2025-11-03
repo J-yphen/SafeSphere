@@ -1,6 +1,6 @@
 # Gradle files
 .gradle/
-build/
+app/build/
 
 # Local configuration file (sdk path, etc)
 local.properties
@@ -36,3 +36,18 @@ google-services.json
 # Default ignored files
 /shelf/
 /workspace.xml
+
+# Build directories
+app/build/
+*/build/
+
+
+# Miscellaneous
+*.apk
+*.ap_
+*.dex
+*.class
+
+# Android NDK
+ndkBuild/
+local.properties
