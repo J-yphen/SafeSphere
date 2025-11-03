@@ -38,16 +38,13 @@ google-services.json
 /workspace.xml
 
 # Build directories
-app/build/
 */build/
 
 
 # Miscellaneous
-*.apk
 *.ap_
 *.dex
 *.class
 
 # Android NDK
 ndkBuild/
-local.properties

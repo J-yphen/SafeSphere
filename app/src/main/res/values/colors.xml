@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light Theme Colors -->
+    <color name="primary_light">#6200EE</color>
+    <color name="primary_variant_light">#3700B3</color>
+    <color name="secondary_light">#03DAC6</color>
+    <color name="background_light">#F7F2FF</color>
+    <color name="text_color_light">#1C1B1F</color>
+
+    <!-- Dark Theme Colors -->
+    <color name="primary_dark">#BB86FC</color>
+    <color name="primary_variant_dark">#3700B3</color>
+    <color name="secondary_dark">#03DAC6</color>
+    <color name="background_dark">#121212</color>
+    <color name="text_color_dark">#E6E1E5</color>
+
+    <!-- Alert Level Colors -->
+    <color name="alert_green">#388E3C</color>
+    <color name="alert_yellow">#FBC02D</color>
+    <color name="alert_amber">#FFA000</color>
+    <color name="alert_red">#D32F2F</color>
+    <color name="alert_text_color">#FFFFFF</color>
+
+    <!-- UI Component Colors -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="overlay_background">#80000000</color> <!-- Semi-transparent black -->
+</resources>

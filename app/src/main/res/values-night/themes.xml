@@ -1,0 +1,14 @@
+<!-- res/values-night/themes.xml -->
+<resources>
+    <style name="Theme.SafeSphere" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Color Palette -->
+        <item name="colorPrimary">@color/primary_dark</item>
+        <item name="colorPrimaryVariant">@color/primary_variant_dark</item>
+        <item name="colorSecondary">@color/secondary_dark</item>
+        <item name="android:windowBackground">@color/background_dark</item>
+        <item name="android:textColor">@color/text_color_dark</item>
+        <!-- Status Bar Color -->
+        <item name="android:statusBarColor">@color/background_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
