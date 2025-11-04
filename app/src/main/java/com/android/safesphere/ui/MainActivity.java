@@ -4,21 +4,30 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.Intent;
 import android.content.res.Configuration;
+
 import android.net.Uri;
 import android.os.Bundle;
+
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
+
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
+
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
+
 import com.android.safesphere.R;
+import com.android.safesphere.utils.PermissionManager;
 import com.android.safesphere.utils.ThemeHelper;
+
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import org.jetbrains.annotations.NotNull;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -61,6 +70,14 @@ public class MainActivity extends AppCompatActivity {
         uploadMediaButton.setOnClickListener(v -> openFilePicker());
 
         // Handle file picker result
+        liveDetectionButton.setOnClickListener(v -> {
+            if (PermissionManager.checkPermissions(this)) {
+                startActivity(new Intent(this, DetectionActivity.class));
+            } else {
+                PermissionManager.requestPermissions(this);
+            }
+        });
+
         filePickerLauncher = registerForActivityResult(
                 new ActivityResultContracts.StartActivityForResult(),
                 result -> {
@@ -110,5 +127,15 @@ public class MainActivity extends AppCompatActivity {
                 ThemeHelper.setTheme(MainActivity.this, AppCompatDelegate.MODE_NIGHT_YES);
             }
         });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String @NotNull [] permissions, int @NotNull [] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == PermissionManager.REQUEST_CODE && PermissionManager.checkPermissions(this)) {
+            startActivity(new Intent(this, DetectionActivity.class));
+        } else {
+            Toast.makeText(this, "Permissions are required to start detection.", Toast.LENGTH_SHORT).show();
+        }
     }
 }
