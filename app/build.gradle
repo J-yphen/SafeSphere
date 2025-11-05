@@ -4,12 +4,12 @@ plugins {
 
 android {
     namespace 'com.android.safesphere'
-    compileSdk 36
+    compileSdkVersion 36
 
     defaultConfig {
         applicationId "com.android.safesphere"
-        minSdk 24
-        targetSdk 36
+        minSdkVersion 24
+        targetSdkVersion 36
         versionCode 1
         versionName "1.0"
 
@@ -41,4 +41,5 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.7.0'
 
     implementation project(path: ':opencv')
+    implementation 'org.tensorflow:tensorflow-lite:2.8.0'
 }

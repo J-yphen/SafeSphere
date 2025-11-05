@@ -27,11 +27,18 @@ import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
 
 import com.android.safesphere.R;
+import com.android.safesphere.ml.ClassificationResult;
+import com.android.safesphere.ml.RiskCalculator;
+import com.android.safesphere.ml.SceneClassifier;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import org.opencv.android.OpenCVLoader;
 
 import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -50,6 +57,11 @@ public class DetectionActivity extends AppCompatActivity {
     private ProgressBar recordingProgress;
 
 
+    // ML Models and Managers
+    private SceneClassifier sceneClassifier;
+    private RiskCalculator riskCalculator;
+    private AlertManager alertManager;
+
     // CameraX and Threading
     private ExecutorService cameraExecutor;
     private ImageCapture imageCapture;
@@ -59,11 +71,14 @@ public class DetectionActivity extends AppCompatActivity {
     // State
     private Bitmap capturedBitmap = null;
     private Uri capturedVideoUri = null;
+    private File capturedPhotoFile = null;
     private boolean isRecording = false;
 
     // Animation Handler
     private Handler animationHandler = new Handler(Looper.getMainLooper());
     private Runnable animationRunnable;
+
+    private static final int VIDEO_SAMPLING_INTERVAL_MS = 2000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -94,6 +109,9 @@ public class DetectionActivity extends AppCompatActivity {
         }
 
         cameraExecutor = Executors.newSingleThreadExecutor();
+        sceneClassifier = new SceneClassifier(this);
+        riskCalculator = new RiskCalculator();
+        alertManager = new AlertManager(this);
     }
 
     private void startCamera() {
@@ -150,15 +168,16 @@ public class DetectionActivity extends AppCompatActivity {
 
     private void takePhoto() {
         if (imageCapture == null) return;
-        File photoFile = new File(getOutputDirectory(), UUID.randomUUID().toString() + ".jpg");
-        ImageCapture.OutputFileOptions outputOptions = new ImageCapture.OutputFileOptions.Builder(photoFile).build();
+        capturedPhotoFile  = new File(getOutputDirectory(), UUID.randomUUID().toString() + ".jpg");
+        ImageCapture.OutputFileOptions outputOptions = new ImageCapture.OutputFileOptions.Builder(capturedPhotoFile ).build();
 
         imageCapture.takePicture(outputOptions, cameraExecutor, new ImageCapture.OnImageSavedCallback() {
             @Override
             public void onImageSaved(ImageCapture.OutputFileResults outputFileResults) {
-                capturedBitmap = BitmapFactory.decodeFile(photoFile.getAbsolutePath());
+                capturedBitmap = BitmapFactory.decodeFile(capturedPhotoFile .getAbsolutePath());
                 new Handler(Looper.getMainLooper()).post(() -> {
                     // Show ImageView for the photo
+                    capturedVideoUri = null;
                     capturedVideoPreview.setVisibility(View.GONE);
                     capturedImagePreview.setVisibility(View.VISIBLE);
                     capturedImagePreview.setImageBitmap(capturedBitmap);
@@ -169,6 +188,7 @@ public class DetectionActivity extends AppCompatActivity {
             @Override
             public void onError(ImageCaptureException exception) {
                 Log.e(TAG, "Photo capture failed: " + exception.getMessage(), exception);
+                resetToPreviewState();
             }
         });
     }
@@ -215,6 +235,7 @@ public class DetectionActivity extends AppCompatActivity {
                         VideoRecordEvent.Finalize finalizeEvent = (VideoRecordEvent.Finalize) recordEvent;
                         if (!finalizeEvent.hasError()) {
                             capturedVideoUri = finalizeEvent.getOutputResults().getOutputUri();
+                            capturedPhotoFile = null;
                             capturedBitmap = getVideoFrame(capturedVideoUri); // Get first frame for analysis thumbnail
                             runOnUiThread(() -> {
                                 // Show VideoView for the video
@@ -250,9 +271,137 @@ public class DetectionActivity extends AppCompatActivity {
     }
 
     private void analyzeCapturedMedia() {
-        if (capturedBitmap == null) {
+        if (capturedVideoUri != null) {
+            analyzeVideo(capturedVideoUri);
+        } else if (capturedPhotoFile != null) {
+            analyzeImage(capturedBitmap);
+        } else {
             Toast.makeText(this, "No media captured to analyze.", Toast.LENGTH_SHORT).show();
-            return;
+        }
+    }
+
+    private void analyzeImage(Bitmap bitmap) {
+        cameraExecutor.execute(() -> {
+            ClassificationResult sceneResult = (ClassificationResult) sceneClassifier.classifyScene(bitmap);
+            int riskScore = riskCalculator.calculateRiskScore(sceneResult.riskScore, 0, 0);
+
+            new Handler(Looper.getMainLooper()).post(() -> showAnalysisResultDialog(riskScore, sceneResult));
+        });
+    }
+
+    private void analyzeVideo(Uri videoUri) {
+        Toast.makeText(this, "Analyzing video... This may take a moment.", Toast.LENGTH_SHORT).show();
+
+        cameraExecutor.execute(() -> {
+            // We need to track the highest score and the result object that produced it.
+            int highestFinalRisk = -1;
+            ClassificationResult highestRiskResult = null;
+
+            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+
+            try {
+                retriever.setDataSource(this, videoUri);
+                String durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                long durationMs = Long.parseLong(durationStr);
+
+                // Loop through the video, sampling one frame at each interval
+                for (long timeMs = 0; timeMs < durationMs; timeMs += 2000) { // Using 2-second interval
+                    Bitmap frame = retriever.getFrameAtTime(timeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+
+                    if (frame != null) {
+                        // 1. Get the detailed classification result for the current frame
+                        ClassificationResult currentFrameResult = (ClassificationResult) sceneClassifier.classifyScene(frame);
+
+                        // 2. Get other risk factors for the frame (e.g., lighting)
+//                        float lightingRisk = lightingAnalyzer.analyzeLighting(frame);
+
+                        // 3. Calculate the final, combined risk score for THIS frame
+                        // We use 0 for motion, as we are analyzing static frames.
+                        int finalFrameRisk = riskCalculator.calculateRiskScore(currentFrameResult.riskScore, 0, 0);
+
+                        // 4. Check if this frame is the most dangerous one we've seen so far
+                        if (finalFrameRisk > highestFinalRisk) {
+                            highestFinalRisk = finalFrameRisk;
+                            highestRiskResult = currentFrameResult; // Save the details of this specific frame
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Failed during video analysis", e);
+            } finally {
+                try {
+                    retriever.release();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            // After the loop, if we never found a valid frame, create a default result.
+            if (highestRiskResult == null) {
+                highestFinalRisk = 0;
+                highestRiskResult = new ClassificationResult(0.0f, "Analysis Failed", 0.0f);
+            }
+
+            // Make the variables effectively final for the lambda expression
+            int finalScoreToShow = highestFinalRisk;
+            ClassificationResult finalResultToShow = highestRiskResult;
+
+            // Post the final, most critical result back to the UI thread
+            new Handler(Looper.getMainLooper()).post(() -> showAnalysisResultDialog(finalScoreToShow, finalResultToShow));
+        });
+    }
+
+
+    private void showAnalysisResultDialog(int riskScore, ClassificationResult result) {
+        AlertManager.AlertInfo info = alertManager.getAlertInfo(riskScore);
+
+        String message = String.format(
+                "Calculated Risk: %d%%\nLevel: %s\n\nDetected Scene: '%s'\nConfidence: %.2f%%",
+                riskScore,
+                info.levelText,
+                result.bestMatchLabel,
+                result.confidence * 100 // Convert similarity to percentage
+        );
+
+        new AlertDialog.Builder(this)
+                .setTitle("Analysis Complete")
+                .setMessage(message)
+                .setPositiveButton("OK", (dialog, which) -> {
+                    // Delete media and reset state when user clicks OK
+                    deleteCapturedMedia();
+                    resetToPreviewState();
+                })
+                .setOnCancelListener(dialog -> {
+                    // Also delete and reset if the user cancels the dialog
+                    deleteCapturedMedia();
+                    resetToPreviewState();
+                })
+                .show();
+    }
+
+    private void deleteCapturedMedia() {
+        if (capturedPhotoFile != null && capturedPhotoFile.exists()) {
+            if (capturedPhotoFile.delete()) {
+                Log.d(TAG, "Photo deleted successfully: " + capturedPhotoFile.getAbsolutePath());
+            } else {
+                Log.e(TAG, "Failed to delete photo: " + capturedPhotoFile.getAbsolutePath());
+            }
+            capturedPhotoFile = null;
+        }
+
+        if (capturedVideoUri != null) {
+            try {
+                // Use ContentResolver to delete media store entries
+                int rowsDeleted = getContentResolver().delete(capturedVideoUri, null, null);
+                if (rowsDeleted > 0) {
+                    Log.d(TAG, "Video deleted successfully: " + capturedVideoUri);
+                } else {
+                    Log.e(TAG, "Failed to delete video (no rows affected): " + capturedVideoUri);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error deleting video: " + capturedVideoUri, e);
+            }
+            capturedVideoUri = null;
         }
     }
 
@@ -272,6 +421,7 @@ public class DetectionActivity extends AppCompatActivity {
     private void resetToPreviewState() {
         capturedBitmap = null;
         capturedVideoUri = null;
+        capturedPhotoFile = null;
 
         // Hide both preview panes
         capturedImagePreview.setVisibility(View.GONE);
@@ -301,5 +451,7 @@ public class DetectionActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         cameraExecutor.shutdown();
+        if (sceneClassifier != null) sceneClassifier.close();
+        if (alertManager != null) alertManager.release();
     }
 }
