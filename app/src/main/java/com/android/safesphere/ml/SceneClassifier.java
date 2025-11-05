@@ -27,6 +27,8 @@ public class SceneClassifier {
     private final Map<String, Float> sceneRiskMap;
     private final Map<String, float[]> textEmbeddings;
 
+    private static final float SOFTMAX_TEMPERATURE = 0.015f;
+
     public SceneClassifier(Context context) {
         try {
             interpreter = new Interpreter(loadModelFile(context));
@@ -74,29 +76,57 @@ public class SceneClassifier {
         ByteBuffer inputBuffer = convertBitmapToByteBuffer(scaledBitmap);
 
         float[][] imageEmbeddingOutput = new float[1][EMBEDDING_SIZE];
-
         interpreter.run(inputBuffer, imageEmbeddingOutput);
-
         float[] imageEmbedding = imageEmbeddingOutput[0];
 
 
-        // Find the best match using Cosine Similarity
-        String bestMatchLabel = "unknown";
-        float maxSimilarity = -1.0f;
+        Map<String, Float> similarityScores = new HashMap<>();
         for (Map.Entry<String, float[]> entry : textEmbeddings.entrySet()) {
             String label = entry.getKey();
             float[] textEmbedding = entry.getValue();
-            float similarity = cosineSimilarity(imageEmbedding, textEmbedding);
+            similarityScores.put(label, cosineSimilarity(imageEmbedding, textEmbedding));
+        }
 
-            if (similarity > maxSimilarity) {
-                maxSimilarity = similarity;
+        // --- Step 3: Convert similarities to probabilities using Softmax ---
+        Map<String, Float> confidenceScores = softmax(similarityScores, SOFTMAX_TEMPERATURE);
+
+        // --- Step 4: Find the best match from the NEW confidence scores ---
+        String bestMatchLabel = "unknown";
+        float maxConfidence = -1.0f;
+
+        for (Map.Entry<String, Float> entry : confidenceScores.entrySet()) {
+            String label = entry.getKey();
+            float confidence = entry.getValue();
+
+            Log.d(TAG, String.format("VERIFY - Confidence for '%s': %.2f%%", label, confidence * 100));
+
+            if (confidence > maxConfidence) {
+                maxConfidence = confidence;
                 bestMatchLabel = label;
             }
         }
 
-        Log.d(TAG, "Best match: '" + bestMatchLabel + "' with similarity: " + maxSimilarity);
+        Log.d(TAG, "Best match: '" + bestMatchLabel + "' with confidence: " + maxConfidence);
         float finalRiskScore = sceneRiskMap.getOrDefault(bestMatchLabel, 0.0f);
-        return new ClassificationResult(finalRiskScore, bestMatchLabel, maxSimilarity);
+        return new ClassificationResult(finalRiskScore, bestMatchLabel, maxConfidence);
+    }
+
+    private Map<String, Float> softmax(Map<String, Float> scores, float temperature) {
+        Map<String, Float> probabilities = new HashMap<>();
+        float sumExp = 0.0f;
+
+        // Calculate the sum of the exponentiated scores
+        for (float score : scores.values()) {
+            sumExp += (float) Math.exp(score / temperature);
+        }
+
+        // Calculate the softmax probability for each score
+        for (Map.Entry<String, Float> entry : scores.entrySet()) {
+            float probability = (float) (Math.exp(entry.getValue() / temperature) / sumExp);
+            probabilities.put(entry.getKey(), probability);
+        }
+
+        return probabilities;
     }
 
     private float cosineSimilarity(float[] vec1, float[] vec2) {
