@@ -4,9 +4,9 @@ import java.util.Calendar;
 
 public class RiskCalculator {
 
-    private static final float WEIGHT_SCENE = 0.4f;
+    private static final float WEIGHT_SCENE = 0.5f;
     private static final float WEIGHT_MOTION = 0.3f;
-    private static final float WEIGHT_LIGHTING = 0.3f;
+    private static final float WEIGHT_LIGHTING = 0.2f;
     private static final float NIGHT_MULTIPLIER = 1.2f;
 
     public int calculateRiskScore(float sceneRisk, float motionAnomalyScore, float lightingRisk) {
