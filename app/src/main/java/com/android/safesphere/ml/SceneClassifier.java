@@ -98,7 +98,7 @@ public class SceneClassifier {
             String label = entry.getKey();
             float confidence = entry.getValue();
 
-            Log.d(TAG, String.format("VERIFY - Confidence for '%s': %.2f%%", label, confidence * 100));
+//            Log.d(TAG, String.format("VERIFY - Confidence for '%s': %.2f%%", label, confidence * 100));
 
             if (confidence > maxConfidence) {
                 maxConfidence = confidence;

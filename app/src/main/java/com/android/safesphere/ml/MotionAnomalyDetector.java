@@ -3,10 +3,8 @@ package com.android.safesphere.ml;
 import android.graphics.Bitmap;
 import android.util.Log;
 import org.opencv.android.Utils;
-import org.opencv.core.Core;
-import org.opencv.core.Mat;
-import org.opencv.core.MatOfDouble;
-import org.opencv.core.Scalar;
+import org.opencv.core.*;
+import org.opencv.imgproc.CLAHE;
 import org.opencv.imgproc.Imgproc;
 import org.opencv.video.Video;
 import java.util.ArrayList;
@@ -16,16 +14,18 @@ public class MotionAnomalyDetector {
     private static final String TAG = "MotionAnomalyDetector";
     private Mat prevGrayFrame;
     private Mat opticalFlow;
-
-    public MotionAnomalyDetector() {
-        // OpenCV is initialized in DetectionActivity
-    }
+    CLAHE clahe;
 
     public float detectAnomalies(Bitmap currentFrameBitmap) {
         Mat currentFrame = new Mat();
         Utils.bitmapToMat(currentFrameBitmap, currentFrame);
         Mat grayFrame = new Mat();
         Imgproc.cvtColor(currentFrame, grayFrame, Imgproc.COLOR_BGR2GRAY);
+
+        if (clahe == null) {
+            clahe = Imgproc.createCLAHE(2.0, new Size(8, 8));
+        }
+        clahe.apply(grayFrame, grayFrame);
 
         if (prevGrayFrame == null) {
             prevGrayFrame = grayFrame.clone();
@@ -62,7 +62,6 @@ public class MotionAnomalyDetector {
             return 0.0f;
         }
 
-        // --- THIS IS THE KEY IMPROVEMENT ---
         // 1. Calculate Anomaly Area
         float anomalyAreaScore = ((float) nonZeroPixels / (float) anomalyMask.total()) * 100.0f; // Score from 0-100
 
@@ -70,15 +69,15 @@ public class MotionAnomalyDetector {
         Scalar meanIntensityScalar = Core.mean(magnitude, anomalyMask);
         double meanIntensityOfAnomalies = meanIntensityScalar.val[0];
 
-        // Create an "intensity multiplier". Motion faster than 5 pixels/frame starts amplifying the score.
-        // A speed of 15 gives a 3x multiplier. This makes fast movements very significant.
+        // Create an "intensity multiplier". Motion faster than 7 pixels/frame starts amplifying the score.
         float intensityMultiplier = (float) Math.max(1.0, meanIntensityOfAnomalies / 7.0);
-        // --- END OF IMPROVEMENT ---
 
         // 3. Amplify the area score by the intensity.
         float finalMotionScore = anomalyAreaScore * intensityMultiplier;
 
         Log.d(TAG, String.format("VERIFY - Anomaly Ratio: %.2f%%", finalMotionScore));
+
+        releaseMats();
 
         return Math.min(100.0f, finalMotionScore); // Clamp score to a max of 100
     }

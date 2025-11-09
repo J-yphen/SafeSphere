@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.util.Log;
+import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.*;
@@ -24,12 +25,11 @@ import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.video.*;
 import androidx.camera.view.PreviewView;
+import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.content.ContextCompat;
 
 import com.android.safesphere.R;
-import com.android.safesphere.ml.ClassificationResult;
-import com.android.safesphere.ml.RiskCalculator;
-import com.android.safesphere.ml.SceneClassifier;
+import com.android.safesphere.ml.*;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import org.opencv.android.OpenCVLoader;
@@ -37,7 +37,6 @@ import org.opencv.android.OpenCVLoader;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -55,12 +54,15 @@ public class DetectionActivity extends AppCompatActivity {
     private VideoView capturedVideoPreview;
     private TextView captureInstructions;
     private ProgressBar recordingProgress;
+    private ConstraintLayout processingOverlay;
 
 
     // ML Models and Managers
     private SceneClassifier sceneClassifier;
     private RiskCalculator riskCalculator;
     private AlertManager alertManager;
+    private MotionAnomalyDetector motionAnomalyDetector;
+    private LightingAnalyzer lightingAnalyzer;
 
     // CameraX and Threading
     private ExecutorService cameraExecutor;
@@ -78,7 +80,7 @@ public class DetectionActivity extends AppCompatActivity {
     private Handler animationHandler = new Handler(Looper.getMainLooper());
     private Runnable animationRunnable;
 
-    private static final int VIDEO_SAMPLING_INTERVAL_MS = 2000;
+    private static final int VIDEO_SAMPLING_INTERVAL_MS = 1000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -93,6 +95,7 @@ public class DetectionActivity extends AppCompatActivity {
         capturedVideoPreview = findViewById(R.id.captured_video_preview);
         captureInstructions = findViewById(R.id.capture_instructions);
         recordingProgress = findViewById(R.id.recording_progress);
+        processingOverlay = findViewById(R.id.processing_overlay);
 
         initDependencies();
         startCamera();
@@ -102,16 +105,11 @@ public class DetectionActivity extends AppCompatActivity {
     }
 
     private void initDependencies() {
-        if (!OpenCVLoader.initDebug()) {
-            Toast.makeText(this, "OpenCV initialization failed!", Toast.LENGTH_LONG).show();
-            finish();
-            return;
-        }
-
         cameraExecutor = Executors.newSingleThreadExecutor();
         sceneClassifier = new SceneClassifier(this);
         riskCalculator = new RiskCalculator();
         alertManager = new AlertManager(this);
+        lightingAnalyzer = new LightingAnalyzer();
     }
 
     private void startCamera() {
@@ -271,19 +269,28 @@ public class DetectionActivity extends AppCompatActivity {
     }
 
     private void analyzeCapturedMedia() {
+        // --- Show the processing overlay before starting analysis ---
+        runOnUiThread(() -> processingOverlay.setVisibility(View.VISIBLE));
+
+        // Reset the motion detector's state before starting a new analysis
+        motionAnomalyDetector = new MotionAnomalyDetector();
+
         if (capturedVideoUri != null) {
             analyzeVideo(capturedVideoUri);
         } else if (capturedPhotoFile != null) {
             analyzeImage(capturedBitmap);
         } else {
             Toast.makeText(this, "No media captured to analyze.", Toast.LENGTH_SHORT).show();
+            runOnUiThread(() -> processingOverlay.setVisibility(View.GONE));
         }
     }
 
     private void analyzeImage(Bitmap bitmap) {
         cameraExecutor.execute(() -> {
             ClassificationResult sceneResult = (ClassificationResult) sceneClassifier.classifyScene(bitmap);
-            int riskScore = riskCalculator.calculateRiskScore(sceneResult.riskScore, 0, 0);
+            float motionScore = 0.0f;
+            float lightingRisk = lightingAnalyzer.analyzeLighting(bitmap);
+            int riskScore = riskCalculator.calculateRiskScore(sceneResult.riskScore, motionScore, lightingRisk);
 
             new Handler(Looper.getMainLooper()).post(() -> showAnalysisResultDialog(riskScore, sceneResult));
         });
@@ -293,11 +300,16 @@ public class DetectionActivity extends AppCompatActivity {
         Toast.makeText(this, "Analyzing video... This may take a moment.", Toast.LENGTH_SHORT).show();
 
         cameraExecutor.execute(() -> {
-            // We need to track the highest score and the result object that produced it.
-            int highestFinalRisk = -1;
-            ClassificationResult highestRiskResult = null;
+            float cumulativeRisk = 0.0f;
+            float maxCumulativeRisk = -1.0f; // Track the peak risk during the video
+            ClassificationResult resultAtMaxRisk = null; // Store the details of the peak risk moment
 
+            // Alpha determines how quickly the score adapts. 0.4 is a good starting point.
+            final float alpha = 0.4f;
+
+            List<Float> motionScores = new ArrayList<>();
             MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+            Bitmap previousFrame = null;
 
             try {
                 retriever.setDataSource(this, videoUri);
@@ -305,25 +317,45 @@ public class DetectionActivity extends AppCompatActivity {
                 long durationMs = Long.parseLong(durationStr);
 
                 // Loop through the video, sampling one frame at each interval
-                for (long timeMs = 0; timeMs < durationMs; timeMs += 2000) { // Using 2-second interval
-                    Bitmap frame = retriever.getFrameAtTime(timeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                for (long timeMs = 0; timeMs < durationMs; timeMs += VIDEO_SAMPLING_INTERVAL_MS) {
+                    Bitmap currentFrame  = retriever.getFrameAtTime(timeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
 
-                    if (frame != null) {
-                        // 1. Get the detailed classification result for the current frame
-                        ClassificationResult currentFrameResult = (ClassificationResult) sceneClassifier.classifyScene(frame);
+                    if (currentFrame  != null) {
+                        // Get the detailed classification result for the current frame
+                        ClassificationResult currentFrameResult = (ClassificationResult) sceneClassifier.classifyScene(currentFrame );
 
-                        // 2. Get other risk factors for the frame (e.g., lighting)
-//                        float lightingRisk = lightingAnalyzer.analyzeLighting(frame);
-
-                        // 3. Calculate the final, combined risk score for THIS frame
-                        // We use 0 for motion, as we are analyzing static frames.
-                        int finalFrameRisk = riskCalculator.calculateRiskScore(currentFrameResult.riskScore, 0, 0);
-
-                        // 4. Check if this frame is the most dangerous one we've seen so far
-                        if (finalFrameRisk > highestFinalRisk) {
-                            highestFinalRisk = finalFrameRisk;
-                            highestRiskResult = currentFrameResult; // Save the details of this specific frame
+                        float motionScore = 0;
+                        if (previousFrame != null) {
+                            // For all subsequent frames, calculate motion anomaly
+                            motionScore = motionAnomalyDetector.detectAnomalies(currentFrame);
+                            motionScores.add(motionScore);
+                        } else {
+                            previousFrame = currentFrame.copy(currentFrame.getConfig(), true);
+                            // Also, feed this first frame to the detector to initialize its state.
+                            motionAnomalyDetector.detectAnomalies(previousFrame);
                         }
+
+
+                        // Get other risk factors for the frame (e.g., lighting)
+                        float lightingRisk = lightingAnalyzer.analyzeLighting(currentFrame);
+
+                        int finalFrameRisk = riskCalculator.calculateRiskScore(currentFrameResult.riskScore, motionScore, lightingRisk);
+
+                        // --- Update cumulative score using EMA ---
+                        cumulativeRisk = (alpha * finalFrameRisk) + ((1.0f - alpha) * cumulativeRisk);
+
+                        Log.d(TAG, String.format("Frame Risk: %d%% and Cumulative Risk: %.2f%%", finalFrameRisk, cumulativeRisk));
+
+
+                        // Check if this is the highest cumulative risk we've seen so far
+                        if (cumulativeRisk > maxCumulativeRisk) {
+                            maxCumulativeRisk = cumulativeRisk;
+                            resultAtMaxRisk = currentFrameResult;
+                        }
+
+                        // Clean up and update the previous frame for the next loop
+                        if(previousFrame != null) previousFrame.recycle();
+                        previousFrame = currentFrame.copy(currentFrame.getConfig(), true);
                     }
                 }
             } catch (Exception e) {
@@ -331,20 +363,22 @@ public class DetectionActivity extends AppCompatActivity {
             } finally {
                 try {
                     retriever.release();
+                    if(previousFrame != null) previousFrame.recycle();
                 } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
             }
 
-            // After the loop, if we never found a valid frame, create a default result.
-            if (highestRiskResult == null) {
-                highestFinalRisk = 0;
-                highestRiskResult = new ClassificationResult(0.0f, "Analysis Failed", 0.0f);
+            int finalScoreToShowTemp = Math.round(maxCumulativeRisk);
+            ClassificationResult finalResultToShowTemp = resultAtMaxRisk;
+
+            if (finalResultToShowTemp == null) {
+                finalScoreToShowTemp = 0;
+                finalResultToShowTemp = new ClassificationResult(0.0f, "Analysis Failed", 0.0f);
             }
 
-            // Make the variables effectively final for the lambda expression
-            int finalScoreToShow = highestFinalRisk;
-            ClassificationResult finalResultToShow = highestRiskResult;
+            int finalScoreToShow = finalScoreToShowTemp;
+            ClassificationResult finalResultToShow = finalResultToShowTemp;
 
             // Post the final, most critical result back to the UI thread
             new Handler(Looper.getMainLooper()).post(() -> showAnalysisResultDialog(finalScoreToShow, finalResultToShow));
@@ -353,31 +387,61 @@ public class DetectionActivity extends AppCompatActivity {
 
 
     private void showAnalysisResultDialog(int riskScore, ClassificationResult result) {
+        processingOverlay.setVisibility(View.GONE);
+
+        // Get the data object from the AlertManager
         AlertManager.AlertInfo info = alertManager.getAlertInfo(riskScore);
 
-        String message = String.format(
-                "Calculated Risk: %d%%\nLevel: %s\n\nDetected Scene: '%s'\nConfidence: %.2f%%",
-                riskScore,
-                info.levelText,
-                result.bestMatchLabel,
-                result.confidence * 100 // Convert similarity to percentage
-        );
+        // --- INFLATE AND PREPARE THE CUSTOM DIALOG VIEW ---
+        // 1. Get the LayoutInflater service
+        LayoutInflater inflater = this.getLayoutInflater();
+        // 2. Inflate the custom layout. The second argument is null because the
+        //    AlertDialog will attach it for us.
+        View dialogView = inflater.inflate(R.layout.dialog_result_layout, null);
 
+        // 3. Find the views inside our custom layout
+        View dialogHeader = dialogView.findViewById(R.id.dialog_header);
+        TextView dialogTitle = dialogView.findViewById(R.id.dialog_title);
+        TextView dialogMessage = dialogView.findViewById(R.id.dialog_message);
+
+        // --- POPULATE THE CUSTOM VIEW WITH OUR DATA ---
+        // 4. *** THIS IS WHERE WE USE THE COLOR ***
+        //    Set the background of the header to the color provided by AlertManager.
+        dialogHeader.setBackgroundColor(info.color);
+
+        // 5. Set the title (we can add the risk level here for more impact)
+        dialogTitle.setText("Analysis Complete: " + info.levelText + " Risk");
+
+        // 6. Build and set the detailed message
+        String message = String.format(
+                "Calculated Risk: %d%%\n\nDetected Scene: '%s'\nConfidence: %.2f%%",
+                riskScore,
+                result.bestMatchLabel,
+                result.confidence * 100
+        );
+        dialogMessage.setText(message);
+
+        // --- BUILD AND SHOW THE DIALOG ---
         new AlertDialog.Builder(this)
-                .setTitle("Analysis Complete")
-                .setMessage(message)
+                // We no longer set the title or message here, as our custom layout handles it.
+                // .setTitle("Analysis Complete")
+                // .setMessage(message)
+
+                // 7. Set the custom view as the content of the dialog.
+                .setView(dialogView)
+
                 .setPositiveButton("OK", (dialog, which) -> {
-                    // Delete media and reset state when user clicks OK
                     deleteCapturedMedia();
                     resetToPreviewState();
                 })
                 .setOnCancelListener(dialog -> {
-                    // Also delete and reset if the user cancels the dialog
                     deleteCapturedMedia();
                     resetToPreviewState();
                 })
+                .setCancelable(false)
                 .show();
     }
+
 
     private void deleteCapturedMedia() {
         if (capturedPhotoFile != null && capturedPhotoFile.exists()) {
@@ -452,6 +516,7 @@ public class DetectionActivity extends AppCompatActivity {
         super.onDestroy();
         cameraExecutor.shutdown();
         if (sceneClassifier != null) sceneClassifier.close();
+        if (motionAnomalyDetector != null) motionAnomalyDetector.release();
         if (alertManager != null) alertManager.release();
     }
 }
