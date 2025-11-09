@@ -19,6 +19,7 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.RecyclerView;
 import com.android.safesphere.R;
+import com.android.safesphere.SafeSphereApp;
 import com.android.safesphere.ml.ClassificationResult;
 import com.android.safesphere.ml.LightingAnalyzer;
 import com.android.safesphere.ml.MotionAnomalyDetector;
@@ -61,6 +62,8 @@ public class BatchAnalysisActivity extends AppCompatActivity {
     private List<AnalysisItem> analysisItems = new ArrayList<>();
     private ResultsAdapter adapter;
     private ExecutorService analysisExecutor;
+
+    private static final int VIDEO_SAMPLING_INTERVAL_MS = SafeSphereApp.VIDEO_SAMPLING_INTERVAL_MS;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -156,14 +159,9 @@ public class BatchAnalysisActivity extends AppCompatActivity {
     }
 
     private void analyzeVideo(AnalysisItem item) {
-        // --- THIS IS THE FIX ---
-        // Create a new, fresh instance of MotionAnomalyDetector for each video.
-        // This ensures there is no stale state (like a prevGrayFrame of a different size)
-        // from a previously analyzed video.
         MotionAnomalyDetector videoMotionDetector = new MotionAnomalyDetector();
-        // --- END OF FIX ---
-
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+
         try {
             retriever.setDataSource(this, item.uri);
 
@@ -180,7 +178,7 @@ public class BatchAnalysisActivity extends AppCompatActivity {
                 Bitmap frame = retriever.getFrameAtTime(timeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
                 if (frame != null) {
                     // Use the new, local instance of the detector
-                    float motionScore = videoMotionDetector.detectAnomalies(frame);
+                    float motionScore = videoMotionDetector.detectAnomalies(frame, new float[3]);
 
                     ClassificationResult frameResult = (ClassificationResult) sceneClassifier.classifyScene(frame);
                     float lightingRisk = lightingAnalyzer.analyzeLighting(frame);
@@ -206,7 +204,6 @@ public class BatchAnalysisActivity extends AppCompatActivity {
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
-            // --- ALSO FIX: Release the local detector's resources ---
             videoMotionDetector.release();
         }
     }

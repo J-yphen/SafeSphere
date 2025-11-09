@@ -29,10 +29,10 @@ import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.content.ContextCompat;
 
 import com.android.safesphere.R;
+import com.android.safesphere.SafeSphereApp;
 import com.android.safesphere.ml.*;
+import com.android.safesphere.utils.GyroscopeManager;
 import com.google.common.util.concurrent.ListenableFuture;
-
-import org.opencv.android.OpenCVLoader;
 
 import java.io.File;
 import java.io.IOException;
@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public class DetectionActivity extends AppCompatActivity {
 
@@ -80,7 +81,11 @@ public class DetectionActivity extends AppCompatActivity {
     private Handler animationHandler = new Handler(Looper.getMainLooper());
     private Runnable animationRunnable;
 
-    private static final int VIDEO_SAMPLING_INTERVAL_MS = 1000;
+    // Add GyroscopeManager and timestamp tracking
+    private GyroscopeManager gyroscopeManager;
+    private long lastFrameTimestamp = 0;
+
+    private static final int VIDEO_SAMPLING_INTERVAL_MS = SafeSphereApp.VIDEO_SAMPLING_INTERVAL_MS;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -97,6 +102,8 @@ public class DetectionActivity extends AppCompatActivity {
         recordingProgress = findViewById(R.id.recording_progress);
         processingOverlay = findViewById(R.id.processing_overlay);
 
+        gyroscopeManager = new GyroscopeManager(this);
+
         initDependencies();
         startCamera();
         setupCaptureButtonListeners();
@@ -111,6 +118,19 @@ public class DetectionActivity extends AppCompatActivity {
         alertManager = new AlertManager(this);
         lightingAnalyzer = new LightingAnalyzer();
     }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        gyroscopeManager.start();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        gyroscopeManager.stop();
+    }
+
 
     private void startCamera() {
         ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
@@ -272,6 +292,10 @@ public class DetectionActivity extends AppCompatActivity {
         // --- Show the processing overlay before starting analysis ---
         runOnUiThread(() -> processingOverlay.setVisibility(View.VISIBLE));
 
+        // --- Reset gyroscope state before each analysis ---
+        gyroscopeManager.reset();
+        lastFrameTimestamp = 0;
+
         // Reset the motion detector's state before starting a new analysis
         motionAnomalyDetector = new MotionAnomalyDetector();
 
@@ -313,28 +337,50 @@ public class DetectionActivity extends AppCompatActivity {
 
             try {
                 retriever.setDataSource(this, videoUri);
+                List<Long> frameTimestampsUs = new ArrayList<>(); // Timestamps in Microseconds
                 String durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
                 long durationMs = Long.parseLong(durationStr);
 
-                // Loop through the video, sampling one frame at each interval
-                for (long timeMs = 0; timeMs < durationMs; timeMs += VIDEO_SAMPLING_INTERVAL_MS) {
-                    Bitmap currentFrame  = retriever.getFrameAtTime(timeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                // We still define an interval to avoid analyzing too many frames.
+                long samplingIntervalUs = VIDEO_SAMPLING_INTERVAL_MS * 1000L;
+                long lastAddedTimestampUs = -samplingIntervalUs; // Initialize to allow the first frame at t=0
 
-                    if (currentFrame  != null) {
-                        // Get the detailed classification result for the current frame
-                        ClassificationResult currentFrameResult = (ClassificationResult) sceneClassifier.classifyScene(currentFrame );
-
-                        float motionScore = 0;
-                        if (previousFrame != null) {
-                            // For all subsequent frames, calculate motion anomaly
-                            motionScore = motionAnomalyDetector.detectAnomalies(currentFrame);
-                            motionScores.add(motionScore);
-                        } else {
-                            previousFrame = currentFrame.copy(currentFrame.getConfig(), true);
-                            // Also, feed this first frame to the detector to initialize its state.
-                            motionAnomalyDetector.detectAnomalies(previousFrame);
+                for (long timeUs = 0; timeUs < durationMs * 1000; timeUs += VIDEO_SAMPLING_INTERVAL_MS * 1000) {
+                    Bitmap frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                    if (frame != null) {
+                        long actualTimestampUs = timeUs; // In a real scenario, API 30's getFramesAtTime would be better. This is a good approximation.
+                        if (actualTimestampUs >= lastAddedTimestampUs + samplingIntervalUs) {
+                            frameTimestampsUs.add(actualTimestampUs);
+                            lastAddedTimestampUs = actualTimestampUs;
                         }
+                        frame.recycle();
+                    }
+                }
+                if (frameTimestampsUs.isEmpty()) { // Add first frame if none were found
+                    frameTimestampsUs.add(0L);
+                }
 
+                for (int i = 0; i < frameTimestampsUs.size(); i++) {
+                    long currentFrameTimestampUs = frameTimestampsUs.get(i);
+                    Bitmap currentFrame = retriever.getFrameAtTime(currentFrameTimestampUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+
+                    if (currentFrame != null) {
+                        float motionScore = 0.0f;
+
+                        if (i > 0) {
+                            long lastFrameTimestampUs = frameTimestampsUs.get(i - 1);
+                            long currentNanos = TimeUnit.MICROSECONDS.toNanos(currentFrameTimestampUs);
+                            long lastNanos = TimeUnit.MICROSECONDS.toNanos(lastFrameTimestampUs);
+
+                            float[] rotation = gyroscopeManager.getIntegratedRotation(lastNanos, currentNanos);
+                            motionScore = motionAnomalyDetector.detectAnomalies(currentFrame, rotation);
+                        } else {
+                            // For the very first frame, just initialize the detector.
+                            motionScore = motionAnomalyDetector.detectAnomalies(currentFrame, new float[3]);
+                        }
+                        motionScores.add(motionScore);
+
+                        ClassificationResult currentFrameResult = (ClassificationResult) sceneClassifier.classifyScene(currentFrame);
 
                         // Get other risk factors for the frame (e.g., lighting)
                         float lightingRisk = lightingAnalyzer.analyzeLighting(currentFrame);
@@ -352,6 +398,8 @@ public class DetectionActivity extends AppCompatActivity {
                             maxCumulativeRisk = cumulativeRisk;
                             resultAtMaxRisk = currentFrameResult;
                         }
+
+                        lastFrameTimestamp = currentFrameTimestampUs;
 
                         // Clean up and update the previous frame for the next loop
                         if(previousFrame != null) previousFrame.recycle();
