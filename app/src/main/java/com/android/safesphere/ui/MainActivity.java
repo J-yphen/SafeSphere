@@ -29,6 +29,8 @@ import com.android.safesphere.utils.ThemeHelper;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+
 public class MainActivity extends AppCompatActivity {
 
     private Thread processingThread;
@@ -82,18 +84,26 @@ public class MainActivity extends AppCompatActivity {
                 new ActivityResultContracts.StartActivityForResult(),
                 result -> {
                     if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
-                        Uri selectedMediaUri = result.getData().getData();
+                        ArrayList<Uri> selectedUris = new ArrayList<>();
                         // TODO: Pass this URI to a new activity/fragment for processing
                         ClipData clipData = result.getData().getClipData();
                         if (clipData != null) {
                             // Multiple files selected
                             int numberOfFiles = clipData.getItemCount();
-                            // Show the number of selected files
+                            for (int i = 0; i < numberOfFiles; i++) {
+                                selectedUris.add(clipData.getItemAt(i).getUri());
+                            }
                             Toast.makeText(this, "Number of selected files: " + numberOfFiles, Toast.LENGTH_LONG).show();
                         } else {
                             // Only a single file selected
+                            selectedUris.add(result.getData().getData());
                             Toast.makeText(this, "Number of selected files: 1", Toast.LENGTH_LONG).show();
 
+                        }
+
+                        if (!selectedUris.isEmpty()) {
+                            // Use our new function to launch the batch analysis activity
+                            launchBatchAnalysis(selectedUris);
                         }
                     }
                 });
@@ -106,6 +116,13 @@ public class MainActivity extends AppCompatActivity {
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         filePickerLauncher.launch(intent);
+    }
+
+    private void launchBatchAnalysis(ArrayList<Uri> uris) {
+        Intent intent = new Intent(this, BatchAnalysisActivity.class);
+        // Pass the list of URIs to the new activity
+        intent.putParcelableArrayListExtra("file_uris", uris);
+        startActivity(intent);
     }
 
     private void setupThemeSwitchButton(FloatingActionButton fab) {
