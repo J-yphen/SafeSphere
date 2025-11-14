@@ -47,6 +47,7 @@ Follow these instructions to get a copy of the project up and running on your lo
 
 *   Android Studio (latest version recommended)
 *   An Android device or emulator with API level 24+
+*   **OpenCV Android SDK:** Download the latest 4.12.0 version from the [official OpenCV website](https://opencv.org/releases/) (e.g., `opencv-4.12.0-android-sdk.zip`).
 
 ### Installation & Setup
 
@@ -55,7 +56,20 @@ Follow these instructions to get a copy of the project up and running on your lo
     git clone https://github.com/J-yphen/SafeSphere.git
     ```
 
-2.  **Model Hosting (Crucial Step)**
+2.  **Unzip the OpenCV SDK**
+    Unzip the downloaded OpenCV Android SDK to a memorable location on your computer (e.g., `/Users/YourName/SDKs/opencv-4.12.0-android-sdk/`).
+
+3.  **Open the Project in Android Studio**
+    Open the cloned `SafeSphere` project folder in Android Studio.
+
+4.  **Import the OpenCV Module (Crucial Step)**
+    The project is configured to use a local OpenCV module. You must import it:
+    *   Go to **`File > New > Import Module...`**.
+    *   In the "Source directory" field, navigate to the location where you unzipped the SDK and select the **`sdk/java`** folder. It should look like this: `.../opencv-4.12.0-android-sdk/sdk/java`.
+    *   Android Studio will suggest a module name, which should default to `opencv`. **Do not change this name.**
+    *   Click **"Finish"**. Android Studio will import the SDK and sync Gradle.
+
+5.  **Model Hosting**
     This app uses on-demand model delivery. You must host the ML models on a cloud service.
     *   **Option A (Easy): GitHub Releases**
         1.  Create a new release in your forked GitHub repository.
@@ -66,16 +80,15 @@ Follow these instructions to get a copy of the project up and running on your lo
         2.  Upload the model files to a Firebase Storage bucket.
         3.  Set up security rules and modify the `ModelDownloader.java` to use the Firebase SDK.
 
-3.  **Configure Model URLs**
-    Open `app/src/main/java/com/android/safesphere/ui/SplashActivity.java` and replace the placeholder URLs with your actual download links from Step 2.
+6.  **Configure Model URLs**
+    Open `app/src/main/java/com/android/safesphere/ui/SplashActivity.java` and replace the placeholder URLs with your actual download links from Step 5.
     ```java
     private static final String CLIP_MODEL_URL = "https://your-direct-download-url/clip_model.tflite";
     private static final String DETECTOR_MODEL_URL = "https://your-direct-download-url/detector_model.tflite";
     ```
 
-4.  **Build and Run**
-    Open the project in Android Studio, let Gradle sync, and run the app on your connected device or emulator. The app will download the models on the first launch.
-
+7.  **Build and Run**
+    Clean and rebuild the project (`Build > Clean Project`, then `Build > Rebuild Project`). Run the app on your connected device or emulator.
 ---
 
 ## Usage
