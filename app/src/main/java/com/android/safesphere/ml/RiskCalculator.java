@@ -8,8 +8,9 @@ public class RiskCalculator {
     private static final float WEIGHT_MOTION = 0.3f;
     private static final float WEIGHT_LIGHTING = 0.2f;
     private static final float NIGHT_MULTIPLIER = 1.2f;
+    private static final float DANGEROUS_OBJECT_MULTIPLIER = 1.5f;
 
-    public int calculateRiskScore(float sceneRisk, float motionAnomalyScore, float lightingRisk) {
+    public int calculateRiskScore(float sceneRisk, float motionAnomalyScore, float lightingRisk, boolean dangerousObjectFound) {
         float timeMultiplier = isNightTime() ? NIGHT_MULTIPLIER : 1.0f;
 
         float combinedRisk = (sceneRisk * 100 * WEIGHT_SCENE) +
@@ -17,6 +18,10 @@ public class RiskCalculator {
                 (lightingRisk * WEIGHT_LIGHTING);
 
         int finalRiskScore = (int) (combinedRisk * timeMultiplier);
+
+        if (dangerousObjectFound) {
+            finalRiskScore *= DANGEROUS_OBJECT_MULTIPLIER;
+        }
 
         return Math.min(100, Math.max(0, finalRiskScore));
     }

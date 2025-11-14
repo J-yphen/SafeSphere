@@ -48,3 +48,4 @@ google-services.json
 
 # Android NDK
 ndkBuild/
+/models/*

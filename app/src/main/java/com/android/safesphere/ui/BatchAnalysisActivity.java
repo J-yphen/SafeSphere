@@ -3,6 +3,7 @@ package com.android.safesphere.ui;
 import android.content.Context;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Bundle;
@@ -20,14 +21,10 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.RecyclerView;
 import com.android.safesphere.R;
 import com.android.safesphere.SafeSphereApp;
-import com.android.safesphere.ml.ClassificationResult;
-import com.android.safesphere.ml.LightingAnalyzer;
-import com.android.safesphere.ml.MotionAnomalyDetector;
-import com.android.safesphere.ml.RiskCalculator;
-import com.android.safesphere.ml.SceneClassifier;
+import com.android.safesphere.ml.*;
+
 import java.io.IOException;
 import java.io.InputStream;
-import android.graphics.BitmapFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -58,6 +55,8 @@ public class BatchAnalysisActivity extends AppCompatActivity {
     private LightingAnalyzer lightingAnalyzer;
     private RiskCalculator riskCalculator;
     private AlertManager alertManager;
+    private ObjectDetector objectDetector;
+
 
     private List<AnalysisItem> analysisItems = new ArrayList<>();
     private ResultsAdapter adapter;
@@ -98,6 +97,7 @@ public class BatchAnalysisActivity extends AppCompatActivity {
         lightingAnalyzer = new LightingAnalyzer();
         riskCalculator = new RiskCalculator();
         alertManager = new AlertManager(this);
+        objectDetector = new ObjectDetector(this);
     }
 
     // Prepares the list of items, extracting thumbnails and filenames
@@ -148,8 +148,9 @@ public class BatchAnalysisActivity extends AppCompatActivity {
         try (InputStream inputStream = getContentResolver().openInputStream(item.uri)) {
             Bitmap bitmap = BitmapFactory.decodeStream(inputStream);
             if (bitmap != null) {
+                boolean objectFound = objectDetector.containsDangerousObject(bitmap);
                 item.result = (ClassificationResult) sceneClassifier.classifyScene(bitmap);
-                item.riskScore = riskCalculator.calculateRiskScore(item.result.riskScore, 0, lightingAnalyzer.analyzeLighting(bitmap));
+                item.riskScore = riskCalculator.calculateRiskScore(item.result.riskScore, 0, lightingAnalyzer.analyzeLighting(bitmap), objectFound);
                 item.alertInfo = alertManager.getAlertInfo(item.riskScore);
                 bitmap.recycle();
             }
@@ -180,9 +181,10 @@ public class BatchAnalysisActivity extends AppCompatActivity {
                     // Use the new, local instance of the detector
                     float motionScore = videoMotionDetector.detectAnomalies(frame, new float[3]);
 
+                    boolean objectFound = objectDetector.containsDangerousObject(frame);
                     ClassificationResult frameResult = (ClassificationResult) sceneClassifier.classifyScene(frame);
                     float lightingRisk = lightingAnalyzer.analyzeLighting(frame);
-                    int finalFrameRisk = riskCalculator.calculateRiskScore(frameResult.riskScore, motionScore, lightingRisk);
+                    int finalFrameRisk = riskCalculator.calculateRiskScore(frameResult.riskScore, motionScore, lightingRisk, objectFound);
 
                     cumulativeRisk = (alpha * finalFrameRisk) + ((1.0f - alpha) * cumulativeRisk);
                     if (cumulativeRisk > maxCumulativeRisk) {

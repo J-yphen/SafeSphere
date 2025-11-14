@@ -15,7 +15,6 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.*;
-
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.CameraSelector;
@@ -27,12 +26,12 @@ import androidx.camera.video.*;
 import androidx.camera.view.PreviewView;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.content.ContextCompat;
-
 import com.android.safesphere.R;
 import com.android.safesphere.SafeSphereApp;
 import com.android.safesphere.ml.*;
 import com.android.safesphere.utils.GyroscopeManager;
 import com.google.common.util.concurrent.ListenableFuture;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
 import java.io.IOException;
@@ -64,6 +63,7 @@ public class DetectionActivity extends AppCompatActivity {
     private AlertManager alertManager;
     private MotionAnomalyDetector motionAnomalyDetector;
     private LightingAnalyzer lightingAnalyzer;
+    private ObjectDetector objectDetector;
 
     // CameraX and Threading
     private ExecutorService cameraExecutor;
@@ -78,7 +78,7 @@ public class DetectionActivity extends AppCompatActivity {
     private boolean isRecording = false;
 
     // Animation Handler
-    private Handler animationHandler = new Handler(Looper.getMainLooper());
+    private final Handler animationHandler = new Handler(Looper.getMainLooper());
     private Runnable animationRunnable;
 
     // Add GyroscopeManager and timestamp tracking
@@ -117,6 +117,7 @@ public class DetectionActivity extends AppCompatActivity {
         riskCalculator = new RiskCalculator();
         alertManager = new AlertManager(this);
         lightingAnalyzer = new LightingAnalyzer();
+        objectDetector = new ObjectDetector(this);
     }
 
     @Override
@@ -191,7 +192,7 @@ public class DetectionActivity extends AppCompatActivity {
 
         imageCapture.takePicture(outputOptions, cameraExecutor, new ImageCapture.OnImageSavedCallback() {
             @Override
-            public void onImageSaved(ImageCapture.OutputFileResults outputFileResults) {
+            public void onImageSaved(ImageCapture.@NotNull OutputFileResults outputFileResults) {
                 capturedBitmap = BitmapFactory.decodeFile(capturedPhotoFile .getAbsolutePath());
                 new Handler(Looper.getMainLooper()).post(() -> {
                     // Show ImageView for the photo
@@ -204,7 +205,7 @@ public class DetectionActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onError(ImageCaptureException exception) {
+            public void onError(@NotNull ImageCaptureException exception) {
                 Log.e(TAG, "Photo capture failed: " + exception.getMessage(), exception);
                 resetToPreviewState();
             }
@@ -233,7 +234,6 @@ public class DetectionActivity extends AppCompatActivity {
         animationHandler.post(animationRunnable);
 
         String fileName = "VID_" + UUID.randomUUID().toString() + ".mp4";
-        File videoFile = new File(getOutputDirectory(), fileName);
 
         ContentValues contentValues = new ContentValues();
         contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
@@ -311,10 +311,12 @@ public class DetectionActivity extends AppCompatActivity {
 
     private void analyzeImage(Bitmap bitmap) {
         cameraExecutor.execute(() -> {
+            boolean objectFound = objectDetector.containsDangerousObject(bitmap);
+
             ClassificationResult sceneResult = (ClassificationResult) sceneClassifier.classifyScene(bitmap);
             float motionScore = 0.0f;
             float lightingRisk = lightingAnalyzer.analyzeLighting(bitmap);
-            int riskScore = riskCalculator.calculateRiskScore(sceneResult.riskScore, motionScore, lightingRisk);
+            int riskScore = riskCalculator.calculateRiskScore(sceneResult.riskScore, motionScore, lightingRisk, objectFound);
 
             new Handler(Looper.getMainLooper()).post(() -> showAnalysisResultDialog(riskScore, sceneResult));
         });
@@ -331,9 +333,7 @@ public class DetectionActivity extends AppCompatActivity {
             // Alpha determines how quickly the score adapts. 0.4 is a good starting point.
             final float alpha = 0.4f;
 
-            List<Float> motionScores = new ArrayList<>();
             MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-            Bitmap previousFrame = null;
 
             try {
                 retriever.setDataSource(this, videoUri);
@@ -378,14 +378,14 @@ public class DetectionActivity extends AppCompatActivity {
                             // For the very first frame, just initialize the detector.
                             motionScore = motionAnomalyDetector.detectAnomalies(currentFrame, new float[3]);
                         }
-                        motionScores.add(motionScore);
 
+                        boolean objectFound = objectDetector.containsDangerousObject(currentFrame);
                         ClassificationResult currentFrameResult = (ClassificationResult) sceneClassifier.classifyScene(currentFrame);
 
                         // Get other risk factors for the frame (e.g., lighting)
                         float lightingRisk = lightingAnalyzer.analyzeLighting(currentFrame);
 
-                        int finalFrameRisk = riskCalculator.calculateRiskScore(currentFrameResult.riskScore, motionScore, lightingRisk);
+                        int finalFrameRisk = riskCalculator.calculateRiskScore(currentFrameResult.riskScore, motionScore, lightingRisk, objectFound);
 
                         // --- Update cumulative score using EMA ---
                         cumulativeRisk = (alpha * finalFrameRisk) + ((1.0f - alpha) * cumulativeRisk);
@@ -400,10 +400,6 @@ public class DetectionActivity extends AppCompatActivity {
                         }
 
                         lastFrameTimestamp = currentFrameTimestampUs;
-
-                        // Clean up and update the previous frame for the next loop
-                        if(previousFrame != null) previousFrame.recycle();
-                        previousFrame = currentFrame.copy(currentFrame.getConfig(), true);
                     }
                 }
             } catch (Exception e) {
@@ -411,7 +407,6 @@ public class DetectionActivity extends AppCompatActivity {
             } finally {
                 try {
                     retriever.release();
-                    if(previousFrame != null) previousFrame.recycle();
                 } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
@@ -566,5 +561,6 @@ public class DetectionActivity extends AppCompatActivity {
         if (sceneClassifier != null) sceneClassifier.close();
         if (motionAnomalyDetector != null) motionAnomalyDetector.release();
         if (alertManager != null) alertManager.release();
+        if (objectDetector != null) objectDetector.close();
     }
 }
