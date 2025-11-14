@@ -88,4 +88,3 @@ Follow these instructions to get a copy of the project up and running on your lo
 4.  **Analyze:** Click the "Analyze" button. A processing overlay will appear while the app runs its ML pipeline.
 5.  **View Results:** A custom dialog will appear, showing the final risk score and details about the detected scene and confidence. The dialog header is colored based on the risk level for immediate visual feedback.
 
----
